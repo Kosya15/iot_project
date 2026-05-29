@@ -2,6 +2,7 @@ import asyncio
 import json
 from typing import Set, Dict, List, Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import (
     create_engine,
     MetaData,
@@ -126,9 +127,30 @@ async def send_data_to_subscribers(user_id: int, data):
 
 @app.post("/processed_agent_data/")
 async def create_processed_agent_data(data: List[ProcessedAgentData]):
-    # Insert data to database
-    # Send data to subscribers
-    pass
+    to_insert = []
+    for item in data:
+        to_insert.append({
+            "road_state": item.road_state,
+            "user_id": item.agent_data.user_id,
+            "x": item.agent_data.accelerometer.x,
+            "y": item.agent_data.accelerometer.y,
+            "z": item.agent_data.accelerometer.z,
+            "latitude": item.agent_data.gps.latitude,
+            "longitude": item.agent_data.gps.longitude,
+            "timestamp": item.agent_data.timestamp
+        })
+
+    with SessionLocal() as db_session:
+        if to_insert:
+            insert_stmt = processed_agent_data.insert().values(to_insert)
+            db_session.execute(insert_stmt)
+            db_session.commit()
+
+    for item in data:
+        safe_data = jsonable_encoder(item)
+        await send_data_to_subscribers(item.agent_data.user_id, safe_data)
+
+    return {"status": "success", "inserted_items": len(to_insert)}
 
 
 @app.get(
@@ -136,14 +158,24 @@ async def create_processed_agent_data(data: List[ProcessedAgentData]):
     response_model=ProcessedAgentDataInDB,
 )
 def read_processed_agent_data(processed_agent_data_id: int):
-    # Get data by id
-    pass
+    with SessionLocal() as db_session:
+        query = processed_agent_data.select().where(
+            processed_agent_data.c.id == processed_agent_data_id
+        )
+        result = db_session.execute(query).first()
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="Data not found")
+
+        return result
 
 
 @app.get("/processed_agent_data/", response_model=list[ProcessedAgentDataInDB])
 def list_processed_agent_data():
-    # Get list of data
-    pass
+    with SessionLocal() as db_session:
+        query = processed_agent_data.select()
+        result = db_session.execute(query).fetchall()
+        return result
 
 
 @app.put(
@@ -151,8 +183,37 @@ def list_processed_agent_data():
     response_model=ProcessedAgentDataInDB,
 )
 def update_processed_agent_data(processed_agent_data_id: int, data: ProcessedAgentData):
-    # Update data
-    pass
+    update_values = {
+        "road_state": data.road_state,
+        "user_id": data.agent_data.user_id,
+        "x": data.agent_data.accelerometer.x,
+        "y": data.agent_data.accelerometer.y,
+        "z": data.agent_data.accelerometer.z,
+        "latitude": data.agent_data.gps.latitude,
+        "longitude": data.agent_data.gps.longitude,
+        "timestamp": data.agent_data.timestamp,
+    }
+
+    with SessionLocal() as db_session:
+        stmt = (
+            processed_agent_data.update()
+            .where(processed_agent_data.c.id == processed_agent_data_id)
+            .values(**update_values)
+        )
+
+        result = db_session.execute(stmt)
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Data not found")
+
+        db_session.commit()
+
+        select_stmt = processed_agent_data.select().where(
+            processed_agent_data.c.id == processed_agent_data_id
+        )
+        updated_row = db_session.execute(select_stmt).first()
+
+        return updated_row
 
 
 @app.delete(
@@ -160,8 +221,22 @@ def update_processed_agent_data(processed_agent_data_id: int, data: ProcessedAge
     response_model=ProcessedAgentDataInDB,
 )
 def delete_processed_agent_data(processed_agent_data_id: int):
-    # Delete by id
-    pass
+    with SessionLocal() as db_session:
+        select_stmt = processed_agent_data.select().where(
+            processed_agent_data.c.id == processed_agent_data_id
+        )
+        existing_row = db_session.execute(select_stmt).first()
+
+        if existing_row is None:
+            raise HTTPException(status_code=404, detail="Data not found")
+
+        delete_stmt = processed_agent_data.delete().where(
+            processed_agent_data.c.id == processed_agent_data_id
+        )
+        db_session.execute(delete_stmt)
+        db_session.commit()
+
+        return existing_row
 
 
 if __name__ == "__main__":

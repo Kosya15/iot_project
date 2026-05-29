@@ -221,3 +221,5 @@ __marimo__/
 
 **/docker/mosquitto/data/
 **/docker/mosquitto/log/
+
+.idea/
